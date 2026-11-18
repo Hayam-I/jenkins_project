@@ -1,0 +1,95 @@
+// Jenkinsfile_Hayam_Itani
+// CI/CD pipeline for jenkins_project (Lab 10).
+// Works on Linux/macOS agents (sh) and Windows agents (bat).
+
+// Run the virtual environment's Python with the given arguments.
+// Calling the venv's interpreter directly avoids needing to "activate" it,
+// which differs between Unix (venv/bin) and Windows (venv\Scripts).
+def venvPython(String args) {
+    if (isUnix()) {
+        sh "${env.VIRTUAL_ENV}/bin/python ${args}"
+    } else {
+        bat "${env.VIRTUAL_ENV}\\Scripts\\python.exe ${args}"
+    }
+}
+
+pipeline {
+    agent any
+    environment {
+        VIRTUAL_ENV = 'venv'
+    }
+    stages {
+        stage('Setup') {
+            steps {
+                script {
+                    if (!fileExists(env.VIRTUAL_ENV)) {
+                        if (isUnix()) {
+                            sh "python3 -m venv ${env.VIRTUAL_ENV}"
+                        } else {
+                            bat "python -m venv ${env.VIRTUAL_ENV}"
+                        }
+                    }
+                    venvPython('-m pip install -r requirements.txt')
+                }
+            }
+        }
+        stage('Lint') {
+            steps {
+                script {
+                    venvPython('-m flake8 app.py deploy.py tests')
+                }
+            }
+        }
+        stage('Test') {
+            steps {
+                script {
+                    venvPython('-m pytest -v')
+                }
+            }
+        }
+        stage('Coverage') {
+            steps {
+                script {
+                    venvPython('-m coverage run -m pytest')
+                    venvPython('-m coverage html')
+                    venvPython('-m coverage xml')
+                    // Fails the build if total coverage drops below 80%.
+                    venvPython('-m coverage report --fail-under=80')
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'htmlcov/**, coverage.xml',
+                                     allowEmptyArchive: true
+                }
+            }
+        }
+        stage('Security Scan') {
+            steps {
+                script {
+                    // Exits non-zero (failing the build) if any issue is found.
+                    venvPython('-m bandit -r . -x ./venv,./tests')
+                }
+            }
+        }
+        stage('Deploy') {
+            steps {
+                script {
+                    echo "Deploying application..."
+                    venvPython('deploy.py')
+                }
+            }
+        }
+    }
+    post {
+        success {
+            echo 'Pipeline succeeded: all stages passed.'
+        }
+        failure {
+            echo 'Pipeline failed: check the stage logs above.'
+        }
+        always {
+            cleanWs()
+        }
+    }
+}
